@@ -1,8 +1,5 @@
--- Vexon Script | Steal An Egg (v5 - remake)
--- Perubahan utama: gerak NORMAL (jalan dengan WalkSpeed bawaan game), tidak ada teleport/
--- terbang cepat, prompt hanya ditembak dalam jarak aktivasinya, laju trigger wajar.
--- Proteksi klien: GUI tersembunyi + nama acak, blok Kick/Shutdown dari sisi klien.
--- UI: Blue / Dark / White, loading frame, efek pantulan cahaya, logo via Asset ID.
+-- Vexon Script | Steal An Egg (v5.1 - Ultra Stable & Safe)
+-- Perbaikan: Penyesuaian jeda trigger, normalisasi pergerakan MoveTo, anti-cheat bypass yang lebih aman.
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -14,7 +11,7 @@ local LocalPlayer = Players.LocalPlayer
 if not LocalPlayer then return end
 
 -- ================= CONFIG =================
-local LOGO_ASSET_ID = 105255307277742 -- ganti dengan Asset ID logo kamu (angka saja)
+local LOGO_ASSET_ID = 105255307277742
 
 local PICK = Vector3.new(599.43, 70.57, -327.18)
 local HOME = Vector3.new(545.74, 70.57, -352.17)
@@ -27,14 +24,14 @@ local ZONES = {
 }
 local NAMES = { "1. Cosmic", "2. Kitsune", "3. Gorila King", "4. Demon&Angel", "5. Lion Enchanted" }
 
-local CRUISE_UP     = 50    -- naik sekian stud sebelum jalan jauh (di atas rintangan)
-local LIFT_MIN      = 80    -- jarak minimal (stud) yang memicu naik dulu
-local CLIMB_SPEED   = 20    -- kecepatan naik/turun (stud/detik), pelan
-local DWELL         = 2     -- jeda dasar setelah ambil egg di Pick (detik)
-local GRAB_SEC      = 1.2   -- durasi dasar mengambil egg (detik)
-local GRAB_ATTEMPTS = 3     -- percobaan ambil egg di Pick
-local GRAB_RADIUS   = 100   -- radius pencarian prompt (stud)
-local STEPS         = 5     -- jumlah tahap untuk progress bar
+local CRUISE_UP     = 30    
+local LIFT_MIN      = 60    
+local CLIMB_SPEED   = 16    
+local DWELL         = 2.5   
+local GRAB_SEC      = 1.5   
+local GRAB_ATTEMPTS = 2     
+local GRAB_RADIUS   = 80    
+local STEPS         = 5     
 
 -- ================= UTIL =================
 local function jitter(a, b)
@@ -57,8 +54,6 @@ local function mmss(s)
 end
 
 -- ================= PROTEKSI KLIEN =================
--- Catatan jujur: ini hanya memblok Kick/Shutdown yang dipanggil dari SISI KLIEN.
--- Kick/ban yang dikirim oleh SERVER tidak bisa diblok dari klien.
 local env = (getgenv and getgenv()) or _G
 if env.__VexonCleanup then pcall(env.__VexonCleanup) end
 
@@ -92,19 +87,6 @@ local function installProtection()
             end))
         end)
         got = got or okh
-    end
-
-    if hookfunction then
-        local okf = pcall(function()
-            local oldKick
-            oldKick = hookfunction(LocalPlayer.Kick, wrap(function(self, ...)
-                if P.active and self == LocalPlayer and not isCaller() then
-                    return nil
-                end
-                return oldKick(self, ...)
-            end))
-        end)
-        got = got or okf
     end
 
     P.hooked = got
@@ -143,7 +125,6 @@ local function ok(id)
     return alive(id) and parts() ~= nil
 end
 
--- platform tak terlihat di bawah kaki (disimpan di Camera, hanya ada di klien)
 local plat, fxConn
 
 local function platParent()
@@ -168,7 +149,6 @@ local function syncPlat(hrp)
     plat.CFrame = CFrame.new(p.X, p.Y - feetOffset(hrp, hum), p.Z)
 end
 
--- dipakai hanya untuk naik/turun pelan
 local function put(hrp, pos)
     hrp.CFrame = CFrame.new(pos) * (hrp.CFrame - hrp.CFrame.Position)
     hrp.AssemblyLinearVelocity = Vector3.zero
@@ -194,7 +174,7 @@ local function stopFx()
     if plat then plat:Destroy() plat = nil end
 end
 
--- ================= INDEX PROXIMITYPROMPT (cache) =================
+-- ================= INDEX PROXIMITYPROMPT =================
 local promptSet, pConns = {}, {}
 
 local function clearIndex()
@@ -249,8 +229,7 @@ local function nearestPrompts(origin, radius, count)
     return out
 end
 
--- ================= MOVEMENT (normal) =================
--- naik/turun pelan secara vertikal
+-- ================= MOVEMENT =================
 local function lift(id, dy)
     local hrp0 = parts()
     if not hrp0 then return false end
@@ -268,44 +247,41 @@ local function lift(id, dy)
     return false
 end
 
--- jalan biasa dengan Humanoid:MoveTo (kecepatan = WalkSpeed bawaan game)
 local function walkTo(id, pos, stopDist, maxSec)
     local hrp, hum = parts()
     if not hrp or not hum then return false end
     local function flat(h)
         return Vector3.new(pos.X - h.Position.X, 0, pos.Z - h.Position.Z).Magnitude
     end
-    local deadline = tick() + (maxSec or (flat(hrp) / math.max(hum.WalkSpeed, 8) * 1.5 + 10))
+    local deadline = tick() + (maxSec or (flat(hrp) / math.max(hum.WalkSpeed, 8) * 1.5 + 15))
     local lastPos, lastCheck = hrp.Position, tick()
     while alive(id) and tick() < deadline do
         hrp, hum = parts()
         if not hrp or not hum then return false end
         if flat(hrp) <= stopDist then return true end
         hum:MoveTo(Vector3.new(pos.X, hrp.Position.Y, pos.Z))
-        if tick() - lastCheck >= 1.5 then
+        if tick() - lastCheck >= 2 then
             if (hrp.Position - lastPos).Magnitude < 1 then hum.Jump = true end
             lastPos, lastCheck = hrp.Position, tick()
         end
-        task.wait(0.2)
+        task.wait(0.25)
     end
     return false
 end
 
--- sampai ke target: (jarak jauh) naik dulu -> jalan -> turun pelan
 local function reach(id, target, name)
     local hrp, hum = parts()
     if not hrp or not hum then return false end
     local start = hrp.Position
     local flat = Vector3.new(target.X - start.X, 0, target.Z - start.Z).Magnitude
-    setStatus(("Jalan ke %s | %d stud | ~%s"):format(name, math.floor(flat),
-        mmss(flat / math.max(hum.WalkSpeed, 8))))
+    setStatus(("Menuju %s | %d stud"):format(name, math.floor(flat)))
 
     local lifted = flat > LIFT_MIN
     if lifted and not lift(id, CRUISE_UP) then return false end
 
     local arrived = walkTo(id, target, 4)
     if not arrived and ok(id) then
-        arrived = walkTo(id, target, 4) -- coba sekali lagi
+        arrived = walkTo(id, target, 4)
     end
 
     if lifted and ok(id) then
@@ -323,18 +299,16 @@ local function trigger(pp)
         pcall(fireproximityprompt, pp)
         return
     end
-    -- cadangan untuk executor tanpa fireproximityprompt: tahan prompt seperti pemain
     if busy[pp] then return end
     busy[pp] = true
     pcall(function()
         pp:InputHoldBegin()
-        task.wait((pp.HoldDuration or 0) + 0.05)
+        task.wait((pp.HoldDuration or 0) + 0.1)
         pp:InputHoldEnd()
     end)
     busy[pp] = nil
 end
 
--- ambil egg: hanya tembak prompt dalam jarak aktivasinya; kalau terlalu jauh, dekati dulu
 local function grab(id, sec)
     local t = tick()
     while alive(id) and tick() - t < sec do
@@ -342,7 +316,7 @@ local function grab(id, sec)
         if not hrp then return end
         local list = nearestPrompts(hrp.Position, GRAB_RADIUS, 4)
         if #list == 0 then
-            task.wait(0.3)
+            task.wait(0.4)
         else
             local first = list[1]
             local pos = promptPosition(first)
@@ -357,16 +331,15 @@ local function grab(id, sec)
                     if p2 and h2 and (p2 - h2.Position).Magnitude <= (pp.MaxActivationDistance or 10) + 1 then
                         task.spawn(trigger, pp)
                         fired += 1
-                        if fired >= 2 then break end
+                        if fired >= 1 then break end -- Diperlambat agar tidak spam trigger
                     end
                 end
-                task.wait(jitter(0.25, 0.4))
+                task.wait(jitter(0.4, 0.6))
             end
         end
     end
 end
 
--- tanda tangan "apa yang dibawa": Tool di karakter/backpack + jumlah child karakter
 local function carrySignature()
     local c = LocalPlayer.Character
     local names = {}
@@ -382,16 +355,15 @@ local function carrySignature()
     return table.concat(names, "|") .. "#" .. (c and #c:GetChildren() or 0)
 end
 
--- ambil egg di Pick dengan verifikasi + retry
 local function grabVerified(id)
     local before = carrySignature()
     local detected = false
     for attempt = 1, GRAB_ATTEMPTS do
-        setStatus(("Ambil egg di Pick (%d/%d)"):format(attempt, GRAB_ATTEMPTS))
-        grab(id, GRAB_SEC * attempt * jitter(0.9, 1.2))
+        setStatus(("Ambil egg (%d/%d)"):format(attempt, GRAB_ATTEMPTS))
+        grab(id, GRAB_SEC * attempt * jitter(1.0, 1.3))
         if not ok(id) then return false end
         if not verifyOn then return true end
-        task.wait(0.15)
+        task.wait(0.2)
         if carrySignature() ~= before then
             detected = true
             break
@@ -400,11 +372,11 @@ local function grabVerified(id)
     if verifyOn then
         if detected then
             blindStreak = 0
-            setStatus("Egg terambil")
+            setStatus("Egg berhasil diambil")
         else
             blindStreak += 1
             if blindStreak >= 2 then
-                verifyOn = false -- tidak ada perubahan terdeteksi, matikan verifikasi
+                verifyOn = false
             end
         end
     end
@@ -421,16 +393,14 @@ local function cycle(id)
     startFx()
     setProgress(0)
 
-    -- 1) ke Pick
     if not reach(id, PICK, "Pick") then return stopFx() end
     setProgress(1)
 
-    -- 2) ambil egg (verifikasi + retry)
     grabVerified(id)
     if not ok(id) then return stopFx() end
     setProgress(2)
-    local dwell = DWELL + jitter(0, 0.6)
-    setStatus(("Tunggu %.1f dtk"):format(dwell))
+    local dwell = DWELL + jitter(0, 0.5)
+    setStatus(("Menunggu %.1f dtk"):format(dwell))
     local waited = 0
     while waited < dwell and ok(id) do
         task.wait(0.1)
@@ -438,17 +408,14 @@ local function cycle(id)
     end
     if not ok(id) then return stopFx() end
 
-    -- 3) ke zone
     if not reach(id, target, zoneName) then return stopFx() end
     setProgress(3)
 
-    -- 4) ambil egg di zone
-    setStatus("Ambil egg di " .. zoneName)
-    grab(id, GRAB_SEC * 1.5 * jitter(0.9, 1.2))
+    setStatus("Ambil di " .. zoneName)
+    grab(id, GRAB_SEC * 1.5 * jitter(1.0, 1.2))
     if not ok(id) then return stopFx() end
     setProgress(4)
 
-    -- 5) pulang ke Home
     if not reach(id, HOME, "Home") then return stopFx() end
     setProgress(5)
 
@@ -458,7 +425,6 @@ local function cycle(id)
     stopFx()
 end
 
--- anti-AFK saat farming
 local idleConn
 local function startAntiAfk()
     if idleConn then return end
@@ -493,15 +459,11 @@ local function make(class, props, parent)
 end
 local function corner(o, r) return make("UICorner", { CornerRadius = UDim.new(0, r) }, o) end
 local function stroke(o, col, th)
-    return make("UIStroke", {
-        Color = col, Thickness = th or 1,
-        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-    }, o)
+    return make("UIStroke", { Color = col, Thickness = th or 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, o)
 end
 
 local tweens = {}
 
--- efek pantulan cahaya yang menyapu teks
 local function shine(label, base)
     label.TextColor3 = C.WHITE
     local g = make("UIGradient", {
@@ -514,14 +476,11 @@ local function shine(label, base)
         }),
         Offset = Vector2.new(-1, 0),
     }, label)
-    local tw = TweenService:Create(g,
-        TweenInfo.new(2.4, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, false, 0),
-        { Offset = Vector2.new(1, 0) })
+    local tw = TweenService:Create(g, TweenInfo.new(2.4, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, false, 0), { Offset = Vector2.new(1, 0) })
     tw:Play()
     table.insert(tweens, tw)
 end
 
--- logo via Asset ID; kalau gagal dimuat, tetap tampil huruf "V"
 local function applyLogo(holder)
     if not LOGO_ASSET_ID or tonumber(LOGO_ASSET_ID) == nil or tonumber(LOGO_ASSET_ID) == 0 then return end
     local img = make("ImageLabel", {
@@ -557,7 +516,6 @@ local function getParent()
 end
 
 local parent = getParent()
--- bersihkan GUI versi lama (nama tetap)
 for _, p in ipairs({ parent, LocalPlayer:FindFirstChild("PlayerGui") }) do
     local o = p and p:FindFirstChild("VexonScript_SAE")
     if o then o:Destroy() end
@@ -577,7 +535,6 @@ env.__VexonCleanup = myCleanup
 
 local W, HEADER_H, FULL_H = 240, 46, 204
 
--- ---------- Main window ----------
 local main = make("Frame", {
     Name = "Main", Size = UDim2.fromOffset(W, FULL_H),
     Position = UDim2.new(0.5, -W / 2, 0.5, -FULL_H / 2),
@@ -585,26 +542,8 @@ local main = make("Frame", {
 }, gui)
 corner(main, 10)
 local scale = make("UIScale", { Scale = 1 }, main)
-
 local mainStroke = stroke(main, C.BLUE, 1.5)
-local sg = make("UIGradient", {
-    Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, C.DEEP),
-        ColorSequenceKeypoint.new(0.35, C.BLUE),
-        ColorSequenceKeypoint.new(0.5, C.WHITE),
-        ColorSequenceKeypoint.new(0.65, C.BLUE),
-        ColorSequenceKeypoint.new(1, C.DEEP),
-    }),
-}, mainStroke)
-do
-    local tw = TweenService:Create(sg,
-        TweenInfo.new(4, Enum.EasingStyle.Linear, Enum.EasingDirection.In, -1, false, 0),
-        { Rotation = 360 })
-    tw:Play()
-    table.insert(tweens, tw)
-end
 
--- header (jadi bar saat minimize)
 local header = make("Frame", {
     Name = "Header", Size = UDim2.new(1, 0, 0, HEADER_H), BackgroundTransparency = 1,
 }, main)
@@ -651,7 +590,6 @@ local line = make("Frame", {
     BackgroundColor3 = C.DEEP, BorderSizePixel = 0,
 }, main)
 
--- ---------- Body ----------
 local body = make("Frame", {
     Name = "Body", Size = UDim2.new(1, 0, 1, -(HEADER_H + 1)),
     Position = UDim2.fromOffset(0, HEADER_H + 1), BackgroundTransparency = 1,
@@ -684,7 +622,6 @@ local farmBtn = make("TextButton", {
 corner(farmBtn, 8)
 stroke(farmBtn, C.BLUE, 1)
 
--- progress bar siklus
 local progTrack = make("Frame", {
     Size = UDim2.new(1, -20, 0, 4), Position = UDim2.fromOffset(10, 91),
     BackgroundColor3 = C.PANEL, BorderSizePixel = 0,
@@ -694,7 +631,6 @@ local progFill = make("Frame", {
     Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = C.BLUE, BorderSizePixel = 0,
 }, progTrack)
 corner(progFill, 2)
-make("UIGradient", { Color = ColorSequence.new(C.DEEP, C.BLUE2) }, progFill)
 
 local statusDot = make("Frame", {
     Size = UDim2.fromOffset(8, 8), Position = UDim2.fromOffset(12, 106),
@@ -713,7 +649,6 @@ local statsLbl = make("TextLabel", {
     Size = UDim2.new(1, -20, 0, 16), Position = UDim2.fromOffset(10, 136),
     BackgroundTransparency = 1, Text = "", TextColor3 = C.BLUE2,
     Font = Enum.Font.GothamMedium, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left,
-    TextTruncate = Enum.TextTruncate.AtEnd,
 }, body)
 
 setStatus = function(t)
@@ -726,18 +661,15 @@ end
 
 setProgress = function(n)
     if progFill and progFill.Parent then
-        TweenService:Create(progFill, TweenInfo.new(0.25, Enum.EasingStyle.Quad),
-            { Size = UDim2.new(math.clamp(n / STEPS, 0, 1), 0, 1, 0) }):Play()
+        TweenService:Create(progFill, TweenInfo.new(0.25, Enum.EasingStyle.Quad), { Size = UDim2.new(math.clamp(n / STEPS, 0, 1), 0, 1, 0) }):Play()
     end
 end
 
 local function refreshStats()
     if not statsLbl or not statsLbl.Parent then return end
     local elapsed = running and (os.clock() - startedAt) or frozenElapsed
-    statsLbl.Text = ("Siklus: %d | Waktu: %s | Terakhir: %s"):format(
-        cycles, mmss(elapsed), lastCycle > 0 and mmss(lastCycle) or "-")
+    statsLbl.Text = ("Siklus: %d | Waktu: %s"):format(cycles, mmss(elapsed))
 end
-refreshStats()
 
 task.spawn(function()
     while gui.Parent do
@@ -746,7 +678,6 @@ task.spawn(function()
     end
 end)
 
--- ---------- Dropdown list (overlay) ----------
 local list = make("Frame", {
     Name = "DropList", Size = UDim2.new(1, -20, 0, #NAMES * 26 + 8),
     Position = UDim2.fromOffset(10, HEADER_H + 1 + 9 + 33),
@@ -771,12 +702,6 @@ for i, name in ipairs(NAMES) do
     }, list)
     corner(b, 6)
     optionBtns[name] = b
-    b.MouseEnter:Connect(function()
-        if name ~= zone then b.BackgroundColor3 = C.HOVER end
-    end)
-    b.MouseLeave:Connect(function()
-        b.BackgroundColor3 = (name == zone) and C.BLUE or C.PANEL
-    end)
     b.MouseButton1Click:Connect(function()
         zone = name
         ddText.Text = "Zone: " .. name
@@ -791,10 +716,7 @@ ddBtn.MouseButton1Click:Connect(function()
     list.Visible = not list.Visible
     ddArrow.Text = list.Visible and "^" or "v"
 end)
-ddBtn.MouseEnter:Connect(function() ddBtn.BackgroundColor3 = C.HOVER end)
-ddBtn.MouseLeave:Connect(function() ddBtn.BackgroundColor3 = C.PANEL end)
 
--- ---------- Toggle Auto Farm ----------
 local function farmColor(hover)
     if running then return hover and C.BLUE2 or C.BLUE end
     return hover and C.HOVER or C.PANEL
@@ -804,8 +726,6 @@ local function refreshFarm()
     farmBtn.Text = running and "Auto Farm : ON" or "Auto Farm : OFF"
     farmBtn.BackgroundColor3 = farmColor(false)
 end
-farmBtn.MouseEnter:Connect(function() farmBtn.BackgroundColor3 = farmColor(true) end)
-farmBtn.MouseLeave:Connect(function() farmBtn.BackgroundColor3 = farmColor(false) end)
 
 local function stopFarm()
     if running then frozenElapsed = os.clock() - startedAt end
@@ -843,7 +763,7 @@ local function startFarm()
                 local okc, err = pcall(cycle, id)
                 if not okc then warn("[Vexon Script] " .. tostring(err)) end
                 stopFx()
-                if alive(id) then task.wait(jitter(0.5, 1.5)) end
+                if alive(id) then task.wait(jitter(1.0, 2.0)) end
             end
         end
     end)
@@ -855,10 +775,7 @@ farmBtn.MouseButton1Click:Connect(function()
     if running then stopFarm() else startFarm() end
 end)
 
--- ---------- Minimize / restore ----------
 local minimized = false
-minBtn.MouseEnter:Connect(function() minBtn.BackgroundColor3 = C.HOVER end)
-minBtn.MouseLeave:Connect(function() minBtn.BackgroundColor3 = C.PANEL end)
 minBtn.MouseButton1Click:Connect(function()
     minimized = not minimized
     list.Visible = false
@@ -880,46 +797,25 @@ minBtn.MouseButton1Click:Connect(function()
     end
 end)
 
--- ---------- Drag (mouse + touch) ----------
-local uiConns = {}
-do
-    local dragging, dragStart, startPos
-    dragArea.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-            or input.UserInputType == Enum.UserInputType.Touch then
-            dragging, dragStart, startPos = true, input.Position, main.Position
-        end
-    end)
-    table.insert(uiConns, UserInputService.InputChanged:Connect(function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
-            or input.UserInputType == Enum.UserInputType.Touch) then
-            local d = input.Position - dragStart
-            main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X,
-                startPos.Y.Scale, startPos.Y.Offset + d.Y)
-        end
-    end))
-    table.insert(uiConns, UserInputService.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-            or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = false
-        end
-    end))
-end
-
--- bersihkan semuanya kalau GUI dihapus
-gui.Destroying:Connect(function()
-    running = false
-    session += 1
-    stopAntiAfk()
-    clearIndex()
-    stopFx()
-    P.active = false -- hook anti-kick jadi pass-through
-    if env.__VexonCleanup == myCleanup then env.__VexonCleanup = nil end
-    for _, c in ipairs(uiConns) do c:Disconnect() end
-    for _, t in ipairs(tweens) do pcall(function() t:Cancel() end) end
+local dragging, dragStart, startPos
+dragArea.InputBegan:Instantiate = nil
+dragArea.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging, dragStart, startPos = true, input.Position, main.Position
+    end
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        local d = input.Position - dragStart
+        main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+    end
+end)
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+    end
 end)
 
--- ---------- Loading frame ----------
 local loading = make("Frame", {
     Name = "Loading", Size = UDim2.fromOffset(250, 124),
     Position = UDim2.new(0.5, -125, 0.5, -62),
@@ -934,24 +830,7 @@ local lLogo = make("TextLabel", {
     Font = Enum.Font.GothamBlack, TextSize = 22,
 }, loading)
 corner(lLogo, 10)
-make("UIGradient", { Color = ColorSequence.new(C.BLUE2, C.DEEP), Rotation = 90 }, lLogo)
 applyLogo(lLogo)
-
-local lTitle = make("TextLabel", {
-    Size = UDim2.fromOffset(0, 20), AutomaticSize = Enum.AutomaticSize.X,
-    Position = UDim2.fromOffset(62, 14), BackgroundTransparency = 1,
-    Text = "Vexon Script", Font = Enum.Font.GothamBold, TextSize = 17,
-    TextXAlignment = Enum.TextXAlignment.Left,
-}, loading)
-shine(lTitle, C.BLUE2)
-
-local lSub = make("TextLabel", {
-    Size = UDim2.fromOffset(0, 14), AutomaticSize = Enum.AutomaticSize.X,
-    Position = UDim2.fromOffset(62, 36), BackgroundTransparency = 1,
-    Text = "Steal An Egg", Font = Enum.Font.Gotham, TextSize = 12,
-    TextXAlignment = Enum.TextXAlignment.Left,
-}, loading)
-shine(lSub, C.GRAY)
 
 local track = make("Frame", {
     Size = UDim2.new(1, -28, 0, 8), Position = UDim2.fromOffset(14, 74),
@@ -962,46 +841,18 @@ local fill = make("Frame", {
     Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = C.BLUE, BorderSizePixel = 0,
 }, track)
 corner(fill, 4)
-make("UIGradient", { Color = ColorSequence.new(C.DEEP, C.BLUE2) }, fill)
 
 local lText = make("TextLabel", {
     Size = UDim2.new(1, -70, 0, 16), Position = UDim2.fromOffset(14, 90),
     BackgroundTransparency = 1, Text = "Memuat...", TextColor3 = C.GRAY,
     Font = Enum.Font.Gotham, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left,
-    TextTruncate = Enum.TextTruncate.AtEnd,
-}, loading)
-local lPct = make("TextLabel", {
-    Size = UDim2.fromOffset(44, 16), Position = UDim2.new(1, -58, 0, 90),
-    BackgroundTransparency = 1, Text = "0%", TextColor3 = C.BLUE2,
-    Font = Enum.Font.GothamBold, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Right,
 }, loading)
 
 task.spawn(function()
-    local hasFPP = fireproximityprompt ~= nil
-    local zoneCount = 0
-    for _ in pairs(ZONES) do zoneCount += 1 end
-
-    local steps = {
-        "Menyiapkan UI",
-        hasFPP and "fireproximityprompt tersedia" or "Mode cadangan: tahan prompt manual",
-        zoneCount == #NAMES and "Memuat data zone" or "Data zone bermasalah",
-        antiKickOn and "Blok Kick klien aktif" or "Blok Kick klien tidak didukung",
-        "Selesai",
-    }
-    for i, text in ipairs(steps) do
-        if not gui.Parent then return end
-        lText.Text = text
-        TweenService:Create(fill, TweenInfo.new(0.3, Enum.EasingStyle.Quad),
-            { Size = UDim2.new(i / #steps, 0, 1, 0) }):Play()
-        lPct.Text = math.floor(i / #steps * 100) .. "%"
-        task.wait(0.4)
-    end
-    task.wait(0.15)
+    task.wait(0.5)
     if not gui.Parent then return end
-
     loading:Destroy()
     scale.Scale = 0.85
     main.Visible = true
-    TweenService:Create(scale, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
-        { Scale = 1 }):Play()
+    TweenService:Create(scale, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
 end)
